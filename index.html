@@ -1,0 +1,278 @@
+<!DOCTYPE html>
+<html>
+  <head>
+    <meta http-equiv="Content-Type" content="text/html; charset=utf-8">
+    
+    <meta name="viewport" content="initial-scale=1, maximum-scale=1,user-scalable=no">
+    <title>Colegio de Administradores de Fincas de Málaga y Melilla</title>
+
+    <link rel="stylesheet" href="https://js.arcgis.com/3.31/dijit/themes/claro/claro.css">
+    <link rel="stylesheet" href="https://js.arcgis.com/3.31/esri/css/esri.css">
+    <style>
+      html, body {
+        height: 100%;
+        width: 100%;
+        margin: 0;
+        padding: 0;
+        overflow:hidden;
+      }
+      #header {
+        border:solid 2px #462d44;
+        background:#fff;
+        color:#444;
+        -moz-border-radius: 4px;
+        border-radius: 4px;
+        font-family: sans-serif;
+        font-size: 1.1em
+        padding-left:20px;
+      }
+      #map {
+        padding:1px;
+        border:solid 2px #444;
+        -moz-border-radius: 4px;
+        border-radius: 4px;
+      }
+      #rightPane {
+        border: solid 2px #444;
+        padding: 10px;
+        width:228px;
+        -moz-border-radius: 4px;
+        border-radius: 4px;
+      }
+	  #resVolcado {
+			font-weight: bold;
+	  }
+	  .resCorrecto {
+        color: #007F0E;
+	  }
+	  .resError {
+        color: #FF0000;
+	  }
+    </style>
+
+    <script src="https://js.arcgis.com/3.31/"></script>
+    <script>
+      var map;
+      require([
+        "esri/map",
+        "esri/config",
+		"esri/arcgis/utils",
+		
+		"esri/dijit/LayerList",
+		
+		"esri/layers/FeatureLayer",
+		"esri/graphic",
+        "esri/tasks/query",
+		"esri/tasks/QueryTask",
+
+        "dojo/_base/lang",
+		"dojo/dom",
+		"dojo/dom-class",
+		"dojo/on",
+        "dojo/parser",
+
+        "dijit/layout/BorderContainer", "dijit/layout/ContentPane",
+        "dijit/form/Button", "dojo/domReady!"
+      ], function(
+        Map, esriConfig, arcgisUtils,
+		LayerList,
+        FeatureLayer, Graphic, Query, QueryTask,
+        lang, dom, domClass, on, parser
+      ) {
+        parser.parse();
+
+        esriConfig.defaults.io.proxyUrl = "/proxy/";
+		
+		//FS_SURVEY = "https://services7.arcgis.com/lTrEzFGSU2ayogtj/ArcGIS/rest/services/survey123_d788f74ca35046aeaea0791aa2440342/FeatureServer/0";
+		FS_SURVEY = "https://services7.arcgis.com/lTrEzFGSU2ayogtj/ArcGIS/rest/services/survey123_15aa7a38bef544c695d39a64de449165/FeatureServer/0";
+		FS_SURVEY_NOMBARRIO = "nombre_de_barrio";
+		FS_SURVEY_NUMEDIF = "n_de_edificios_gestionados_en_e";
+		FS_SURVEY_NUMRIESGO = "field_6";
+		FS_SURVEY_NUMDISDEP = "field_7";
+		FS_SURVEY_NUMZONASCOMUNES = "n_de_edificios_con_zonas_comune";
+		FS_SURVEY_NUMNEGOCIOS = "n_de_negocios_de_alimentaci_n_y";
+		FS_SURVEY_IDIOMAS = "idiomas_hablados";
+		FIELDS_FS_SURVEY = [FS_SURVEY_NOMBARRIO, FS_SURVEY_NUMEDIF, FS_SURVEY_NUMRIESGO, FS_SURVEY_NUMDISDEP, FS_SURVEY_NUMZONASCOMUNES, FS_SURVEY_NUMNEGOCIOS, FS_SURVEY_IDIOMAS];
+		
+		FS_BARRIOS = "https://services7.arcgis.com/lTrEzFGSU2ayogtj/ArcGIS/rest/services/CensoFincasMalagaCOVID19/FeatureServer/0";
+
+        //var token;
+		var datosBarrios = {};
+		var codedValuesNomComunBarrio = {};
+		var map = null;
+		var fsBARRIOS = null;
+		var updatesBarrios = null;
+		
+		//var ID_WEBMAP = "708d61fa8b824c4383aa27d632b37285";
+		var ID_WEBMAP = "bee7423beaa243698e3e4884bb1934ba";
+		arcgisUtils.arcgisUrl = "http://comunidadcovid.maps.arcgis.com/sharing/content/items";
+        arcgisUtils.createMap(ID_WEBMAP, "map").then(function (response) {
+			map = response.map;
+			fsBARRIOS = new FeatureLayer(FS_BARRIOS);
+			fsBARRIOS.setVisibility(false);
+			map.addLayer(fsBARRIOS);	
+			var myWidget = new LayerList({
+			   map: response.map,
+			   layers: arcgisUtils.getLayerList(response)
+			},"layerList");
+			myWidget.startup();			
+			on(dom.byId("volcardatos"), "click", iniVolcarDatos);
+        });
+		
+		function iniVolcarDatos() {
+			dom.byId("volcardatos").disabled = 'disabled';
+			dom.byId("resVolcado").innerHTML = "";
+			var queryTask = new QueryTask(FS_SURVEY);
+			var query = new Query();
+			query.returnGeometry = false;
+			query.where = "1=1";
+			query.outFields = FIELDS_FS_SURVEY;
+			query.orderByFields = [FS_SURVEY_NOMBARRIO];
+			queryTask.execute(query, tratarDatosSurvey, error);
+		}
+
+		function tratarDatosSurvey(results) {
+			var resultCount = results.features.length;
+			var num_edif = 0.0;
+			var num_riesgo = 0.0;
+			var num_dis_dep = 0.0;
+			var num_zonas_comunes = 0.0;
+			var num_negocios = 0.0;
+			var idiomas = [];
+			var barrio_act = null;
+			var barrio_ant = null;
+
+			var codedValues = results.fields[0].domain.codedValues;
+			for (var i = 0; i < codedValues.length; i++) {
+				codedValuesNomComunBarrio[codedValues[i].name] = codedValues[i].code; 
+			}			
+			
+			for (var i = 0; i < resultCount; i++) {
+				var attributes = results.features[i].attributes;
+				barrio_act = attributes[FS_SURVEY_NOMBARRIO];
+				if (!barrio_ant)
+					barrio_ant = barrio_act;
+				if (barrio_act != barrio_ant) {
+					datosBarrios[barrio_ant] = {
+						"num_edif": num_edif,
+						"num_riesgo": num_riesgo,
+						"num_dis_dep": num_dis_dep,
+						"num_zonas_comunes": num_zonas_comunes,
+						"num_negocios": num_negocios,
+						"idiomas": idiomas.sort().join()
+					};
+					barrio_ant = barrio_act;
+					num_edif = 0.0;
+					num_riesgo = 0.0;
+					num_dis_dep = 0.0;
+					num_zonas_comunes = 0.0;
+					num_negocios = 0.0;
+					idiomas = [];
+				}
+				
+				num_edif += attributes[FS_SURVEY_NUMEDIF];
+				num_riesgo += attributes[FS_SURVEY_NUMRIESGO];
+				num_dis_dep += attributes[FS_SURVEY_NUMDISDEP];
+				num_zonas_comunes += attributes[FS_SURVEY_NUMZONASCOMUNES];
+				num_negocios += attributes[FS_SURVEY_NUMNEGOCIOS];
+				tratarIdiomas(attributes[FS_SURVEY_IDIOMAS], idiomas);
+			}
+			
+			if (resultCount > 0) {
+				datosBarrios[barrio_ant] = {
+					"num_edif": num_edif,
+					"num_riesgo": num_riesgo,
+					"num_dis_dep": num_dis_dep,
+					"num_zonas_comunes": num_zonas_comunes,
+					"num_negocios": num_negocios,
+					"idiomas": idiomas.sort().join()
+				};
+			}
+
+			var queryTask = new QueryTask(FS_BARRIOS);
+			var query = new Query();
+			query.returnGeometry = false;
+			query.where = "1=1";
+			query.outFields = ["OBJECTID","NOMNORMALIZBA"];
+			queryTask.execute(query, tratarDatosBarrios, error);
+		}
+
+		function tratarIdiomas(strIdiomas, idiomas) {
+			if (strIdiomas) {
+				var aIdiomas = strIdiomas.split(',');
+				for (var i = 0; i < aIdiomas.length; i++) {
+					var diomaAux = aIdiomas[i];
+					if (diomaAux == "other")
+						diomaAux = "otro";
+					if (idiomas.indexOf(diomaAux) < 0) {
+						idiomas.push(diomaAux);
+					}
+				}
+			}
+		}
+		
+		function tratarDatosBarrios(results) {
+			var resultCount = results.features.length;
+			updatesBarrios = [];
+			for (var i = 0; i < resultCount; i++) {
+				var attributes = results.features[i].attributes;
+				nombreAux = attributes['NOMNORMALIZBA'];
+				nombreAux = codedValuesNomComunBarrio[nombreAux];
+				if (datosBarrios.hasOwnProperty(nombreAux)) {
+					var datosBarrio = datosBarrios[nombreAux];
+					var newAttributes = {
+						"OBJECTID": attributes['OBJECTID'],
+						"NUM_EDIFICIOS": datosBarrio.num_edif,
+						"NUM_EDIF_RIESGO": datosBarrio.num_riesgo,
+						"NUM_EDIF_DISC_DEP": datosBarrio.num_dis_dep,
+						"NUM_EDIF_ZONAS_COMUNES": datosBarrio.num_zonas_comunes,
+						"NUM_NEGOCIOS": datosBarrio.num_negocios,
+						"IDIOMAS": datosBarrio.idiomas
+					};
+					var newGraphic = new Graphic(null, null, newAttributes);
+					updatesBarrios.push(newGraphic);
+				}
+			}
+			
+			if (updatesBarrios.length > 0) {
+				// AÑADIR el FS al mapa de forma invisible para ver si así se llama a resultadoUpdateBarrios después del update
+				// fsBARRIOS= new FeatureLayer(FS_BARRIOS);
+				fsBARRIOS.applyEdits(null, updatesBarrios, null, resultadoUpdateBarrios, error);
+			}
+		}
+		
+		function resultadoUpdateBarrios(adds, updates, deletes) {
+			domClass.remove("resVolcado", "resError");
+			domClass.add("resVolcado", "resCorrecto");
+			dom.byId("resVolcado").innerHTML = "" + updates.length + " barrios actualizados de " + updatesBarrios.length + " barrios con encuestas";			
+			dom.byId("volcardatos").disabled = '';
+		}
+		
+		function error(error) {
+			domClass.remove("resVolcado", "resCorrecto");
+			domClass.add("resVolcado", "resError");
+			dom.byId("resVolcado").innerHTML = "Error en el volcado";
+			dom.byId("volcardatos").disabled = '';
+		}
+      });
+    </script>
+  </head>
+  <body class="claro">
+    <div data-dojo-type="dijit/layout/BorderContainer" data-dojo-props="gutters:true, design:'headline'" style="width:100%;height:100%;">
+      <div data-dojo-type="dijit/layout/ContentPane"  id="header" data-dojo-props="region:'top'">Aplicación de volcado de las encuestas a la capa de barrios de Málaga</div>
+      <div id="map" data-dojo-type="dijit/layout/ContentPane" data-dojo-props="region:'center'"></div>
+      <div id="rightPane" data-dojo-type="dijit/layout/ContentPane" data-dojo-props="region:'right'">
+        <div>
+			<input id="volcardatos" type="button" value="Volcar datos">
+			<br><br>
+			<div id="resVolcado"></div>
+			<br><br>
+			<br><br>
+			<br><br>
+			<div style="font-weight: bold;">Lista de capas</div><br>
+			<div id="layerList"></div>
+		</div>
+      </div>
+    </div>
+  </body>
+</html>
